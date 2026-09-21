@@ -1,36 +1,36 @@
 #!/usr/bin/env bash
-# devbox - startet eine Sandbox (rootless Podman) mit dem aktuellen
-# Verzeichnis unter /workspace und darin nvim, Rust und Claude Code.
+# devbox - starts a sandbox (rootless Podman) with the current directory at
+# /workspace and nvim, Rust and Claude Code inside it.
 #
-# Aufbau der Befehle: Bloße Verben betreffen die Sandbox dieses Verzeichnisses
-# (devbox stop, devbox status), alles andere nennt zuerst das Thema und dann die
-# Aktion (devbox nvim sync, devbox claude auth, devbox firewall reload).
-# Ohne Aktion startet ein Thema sein Programm (devbox nvim, devbox claude).
-# Übersicht: devbox --help
+# Command layout: bare verbs act on the sandbox of this directory (devbox stop,
+# devbox status); everything else names the topic first and the action second
+# (devbox nvim sync, devbox claude auth, devbox firewall reload). Without an
+# action, a topic starts its program (devbox nvim, devbox claude).
+# Overview: devbox --help
 #
-# Konfiguration: ~/.config/devbox/config (Bash, setzt DEVBOX_*-Variablen),
-# Umgebungsvariablen überschreiben die Datei. Siehe README.
+# Configuration: ~/.config/devbox/config (bash, sets DEVBOX_* variables);
+# environment variables override the file. See the README.
 set -euo pipefail
 
 # --- Defaults --------------------------------------------------------------------
 : "${DEVBOX_IMAGE:=localhost/devbox:latest}"
-: "${DEVBOX_RUNTIME:=}"              # podman | docker (leer = automatisch)
+: "${DEVBOX_RUNTIME:=}"              # podman | docker (empty = auto-detect)
 : "${DEVBOX_MEMORY:=8g}"
 : "${DEVBOX_PIDS:=4096}"
-: "${DEVBOX_CPUS:=}"                 # z. B. 4
-: "${DEVBOX_FIREWALL:=1}"            # 0 = Egress-Allowlist aus
-: "${DEVBOX_ALLOW_HOST:=0}"          # 1 = Host-Gateway erreichbar
+: "${DEVBOX_CPUS:=}"                 # e.g. 4
+: "${DEVBOX_FIREWALL:=1}"            # 0 = egress allowlist off
+: "${DEVBOX_ALLOW_HOST:=0}"          # 1 = host gateway reachable
 : "${DEVBOX_EXTRA_DOMAINS:=}"        # "host1 host2"
 : "${DEVBOX_NVIM_CONFIG:=${XDG_CONFIG_HOME:-$HOME/.config}/nvim}"
 : "${DEVBOX_PORTS:=}"                # "8080:8080 3000:3000"
-: "${DEVBOX_MOUNTS:=}"               # zusätzliche -v Specs, leerzeichengetrennt
+: "${DEVBOX_MOUNTS:=}"               # extra -v specs, space separated
 : "${DEVBOX_CLAUDE_ARGS:=--dangerously-skip-permissions}"
-: "${DEVBOX_UID:=1000}"              # UID/GID des Users im Image (Build-Arg USER_UID)
+: "${DEVBOX_UID:=1000}"              # UID/GID of the user in the image (build arg USER_UID)
 : "${DEVBOX_GID:=1000}"
 : "${DEVBOX_VOLUME_PREFIX:=devbox}"
 
 CONFIG_FILE="${XDG_CONFIG_HOME:-$HOME/.config}/devbox/config"
-# Datei darf nur setzen, was nicht schon per Umgebung gesetzt ist -> erst Env sichern
+# The file may only set what the environment has not set -> save the env first
 if [ -f "$CONFIG_FILE" ]; then
   _env_before="$(env | grep '^DEVBOX_' || true)"
   # shellcheck disable=SC1090
@@ -46,94 +46,95 @@ log() { echo "devbox: $*" >&2; }
 
 usage() {
   cat <<'EOF'
-devbox - Sandbox (rootless Podman) mit dem aktuellen Verzeichnis unter /workspace
+devbox - sandbox (rootless Podman) with the current directory at /workspace
 
-Aufruf:  devbox [-C DIR] [BEFEHL [ARGS]]
+Usage:  devbox [-C DIR] [COMMAND [ARGS]]
 
-Sandbox dieses Verzeichnisses
-  devbox [shell]              zsh öffnen (Standard ohne Befehl)
-  devbox root                 Root-Shell, z. B. für apt install (flüchtig)
-  devbox run CMD...           beliebigen Befehl im Container ausführen
-  devbox start                nur starten, ohne eine Shell zu öffnen
-  devbox stop                 Container entfernen
-  devbox restart              Container neu aufsetzen
-  devbox status               Zustand und Ressourcen
-  devbox logs                 Log des Entrypoints
-  devbox list                 alle devbox-Container auf dem Host
+Sandbox of this directory
+  devbox [shell]              open zsh (default without a command)
+  devbox root                 root shell, e.g. for apt install (ephemeral)
+  devbox run CMD...           run any command in the container
+  devbox start                only start it, without opening a shell
+  devbox stop                 remove the container
+  devbox restart              recreate the container
+  devbox status               state and resources
+  devbox logs                 log of the entrypoint
+  devbox list                 all devbox containers on this host
 
 Claude Code
-  devbox claude [ARGS]        starten (mit DEVBOX_CLAUDE_ARGS)
-  devbox claude auth          Login und Onboarding-Status vom Host ins Volume kopieren
+  devbox claude [ARGS]        start it (with DEVBOX_CLAUDE_ARGS)
+  devbox claude auth          copy login and onboarding state from the host into the volume
 
 Neovim
-  devbox nvim [ARGS]          starten
-  devbox nvim sync            Config vom Host neu in den Container kopieren
+  devbox nvim [ARGS]          start it
+  devbox nvim sync            copy the config from the host into the container again
 
 Firewall
-  devbox firewall reload      Allowlist neu anwenden (DNS neu auflösen,
-                              DEVBOX_EXTRA_DOMAINS vom Host übernehmen)
+  devbox firewall reload      reapply the allowlist (re-resolve DNS, pick up
+                              DEVBOX_EXTRA_DOMAINS from the host)
 
 Image
-  devbox image build [ARGS]   Image bauen (ARGS gehen an podman build)
+  devbox image build [ARGS]   build the image (ARGS are passed to podman build)
 
 Volumes
-  devbox volume list          Volumes zeigen (Caches, Claude-Login, nvim-Plugins)
-  devbox volume rm            diese Volumes löschen - der Claude-Login geht verloren
+  devbox volume list          show the volumes (caches, Claude login, nvim plugins)
+  devbox volume rm            delete those volumes - the Claude login is lost
 
 Devcontainer (VS Code)
-  devbox devcontainer init    .devcontainer/devcontainer.json ins Projekt legen
+  devbox devcontainer init    drop .devcontainer/devcontainer.json into the project
 
-Optionen
-  -C DIR                      anderes Verzeichnis als $PWD als Workspace
-  -h, --help                  diese Übersicht
+Options
+  -C DIR                      use a directory other than $PWD as the workspace
+  -h, --help                  this overview
 
-Soll ein Argument an nvim/claude gehen und nicht als Unterbefehl gelten:
+To pass an argument to nvim/claude instead of treating it as an action:
   devbox nvim -- sync
 
-Konfiguration: ~/.config/devbox/config (Bash, setzt DEVBOX_*-Variablen),
-Umgebungsvariablen überschreiben die Datei. Siehe README.
+Configuration: ~/.config/devbox/config (bash, sets DEVBOX_* variables);
+environment variables override the file. See the README.
 EOF
 }
 
-# --- Argumente ----------------------------------------------------------------------------
+# --- Arguments ----------------------------------------------------------------------------
 WORKSPACE="$PWD"
 while [ $# -gt 0 ]; do
   case "$1" in
-    -C) shift; [ $# -gt 0 ] || die "-C braucht ein Verzeichnis"; WORKSPACE="$1"; shift ;;
+    -C) shift; [ $# -gt 0 ] || die "-C needs a directory"; WORKSPACE="$1"; shift ;;
     -h|--help|help) usage; exit 0 ;;
     *) break ;;
   esac
 done
 CMD="${1:-shell}"; [ $# -gt 0 ] && shift
 WORKSPACE="$(readlink -f "$WORKSPACE")"
-[ -d "$WORKSPACE" ] || die "kein Verzeichnis: $WORKSPACE"
+[ -d "$WORKSPACE" ] || die "not a directory: $WORKSPACE"
 
 # --- Runtime ---------------------------------------------------------------------------
+# Resolved after the arguments so that --help works without podman/docker
 if [ -z "$DEVBOX_RUNTIME" ]; then
   if command -v podman >/dev/null; then DEVBOX_RUNTIME=podman
   elif command -v docker >/dev/null; then DEVBOX_RUNTIME=docker
-  else die "weder podman noch docker gefunden"; fi
+  else die "neither podman nor docker found"; fi
 fi
 RT="$DEVBOX_RUNTIME"
 
-# Containername: Basisname + kurzer Hash des Pfads
+# Container name: base name + short hash of the path
 hash8="$(printf '%s' "$WORKSPACE" | sha256sum | cut -c1-8)"
 base="$(printf '%s' "$(basename "$WORKSPACE")" | tr -c 'A-Za-z0-9_.-' '-' | cut -c1-30)"
 NAME="devbox-${base}-${hash8}"
 
-# --- Hilfsfunktionen ---------------------------------------------------------------------
+# --- Helpers ---------------------------------------------------------------------
 running() { [ "$($RT inspect -f '{{.State.Running}}' "$NAME" 2>/dev/null || true)" = "true" ]; }
 exists()  { $RT container exists "$NAME" 2>/dev/null; }
 
-exec_in() {  # exec_in [-r|-rp] CMD...   (-r = als root, -rp = root mit allen Capabilities)
+exec_in() {  # exec_in [-r|-rp] CMD...   (-r = as root, -rp = root with all capabilities)
   local user="$DEVBOX_UID:$DEVBOX_GID" tty=() priv=()
   case "${1:-}" in
     -r)  user=0:0; shift ;;
     -rp) user=0:0; priv=(--privileged); shift ;;
   esac
   [ -t 0 ] && [ -t 1 ] && tty=(-it)
-  # Kennt der Container den Terminaltyp nicht (fehlender terminfo-Eintrag), zeichnen
-  # zsh/nvim jede Eingabe doppelt -> dann auf xterm-256color ausweichen
+  # If the container does not know the terminal type (missing terminfo entry),
+  # zsh/nvim echo every keystroke twice -> fall back to xterm-256color
   $RT exec "${tty[@]}" "${priv[@]}" -u "$user" -w /workspace \
     -e "TERM=${TERM:-xterm-256color}" -e "COLORTERM=${COLORTERM:-truecolor}" \
     "$NAME" sh -c 'infocmp "$TERM" >/dev/null 2>&1 || export TERM=xterm-256color; exec "$@"' sh "$@"
@@ -142,18 +143,18 @@ exec_in() {  # exec_in [-r|-rp] CMD...   (-r = als root, -rp = root mit allen Ca
 start() {
   running && return 0
   if exists; then
-    log "Container $NAME existiert, aber läuft nicht - wird entfernt"
+    log "container $NAME exists but is not running - removing it"
     $RT rm -f "$NAME" >/dev/null
   fi
-  $RT image exists "$DEVBOX_IMAGE" 2>/dev/null || die "Image $DEVBOX_IMAGE fehlt - erst 'devbox image build'"
+  $RT image exists "$DEVBOX_IMAGE" 2>/dev/null || die "image $DEVBOX_IMAGE is missing - run 'devbox image build' first"
 
   local args=(
-    run -d --name "$NAME" --hostname devbox --stop-signal SIGKILL   # sleep als PID 1 ignoriert SIGTERM
+    run -d --name "$NAME" --hostname devbox --stop-signal SIGKILL   # sleep as PID 1 ignores SIGTERM
     --label "devbox.workspace=$WORKSPACE"
     --user 0:0
     --cap-drop ALL
-    --cap-add NET_ADMIN --cap-add NET_RAW        # Firewall im Entrypoint
-    --cap-add SETUID --cap-add SETGID --cap-add SETPCAP --cap-add CHOWN   # setpriv/chown im Entrypoint
+    --cap-add NET_ADMIN --cap-add NET_RAW        # firewall in the entrypoint
+    --cap-add SETUID --cap-add SETGID --cap-add SETPCAP --cap-add CHOWN   # setpriv/chown in the entrypoint
     --security-opt no-new-privileges
     --memory "$DEVBOX_MEMORY" --pids-limit "$DEVBOX_PIDS"
     -v "$WORKSPACE:/workspace:z"
@@ -170,15 +171,15 @@ start() {
   )
   [ -n "$DEVBOX_CPUS" ] && args+=(--cpus "$DEVBOX_CPUS")
   if [ "$RT" = podman ]; then
-    # rootless: Host-User <-> Container-User 1000 abbilden, damit Bind-Mounts passen
+    # rootless: map host user <-> container user 1000 so bind mounts line up
     args+=(--userns "keep-id:uid=$DEVBOX_UID,gid=$DEVBOX_GID")
   fi
   if [ -d "$DEVBOX_NVIM_CONFIG" ]; then
     args+=(-v "$DEVBOX_NVIM_CONFIG:/mnt/host/nvim:ro,z")
   else
-    log "nvim-Config $DEVBOX_NVIM_CONFIG nicht gefunden - nvim ohne Config"
+    log "nvim config $DEVBOX_NVIM_CONFIG not found - nvim without a config"
   fi
-  # Git-Identität vom Host (keine Credentials)
+  # Git identity from the host (no credentials)
   local gname gemail
   gname="$(git config --get user.name 2>/dev/null || true)"
   gemail="$(git config --get user.email 2>/dev/null || true)"
@@ -188,114 +189,114 @@ start() {
   for p in $DEVBOX_PORTS;  do args+=(-p "$p"); done
   for m in $DEVBOX_MOUNTS; do args+=(-v "$m"); done
 
-  log "starte $NAME (Workspace: $WORKSPACE)"
+  log "starting $NAME (workspace: $WORKSPACE)"
   $RT "${args[@]}" "$DEVBOX_IMAGE" >/dev/null
 
-  # auf Entrypoint warten (Firewall, Config-Sync)
+  # wait for the entrypoint (firewall, config sync)
   local i
   for i in $(seq 1 180); do
     if $RT exec "$NAME" test -f /run/devbox.ready 2>/dev/null; then return 0; fi
     if ! running; then
       $RT logs "$NAME" >&2 || true
       $RT rm -f "$NAME" >/dev/null 2>&1 || true
-      die "Container ist beim Start abgebrochen (siehe Log oben). Tipp: DEVBOX_FIREWALL=0 devbox"
+      die "container died during startup (see the log above). Hint: DEVBOX_FIREWALL=0 devbox"
     fi
     sleep 0.5
   done
   $RT logs "$NAME" >&2 || true
-  die "Entrypoint wurde nicht fertig"
+  die "the entrypoint never finished"
 }
 
-# --- Aktionen der Themen-Befehle -------------------------------------------------------------
+# --- Actions of the topic commands -------------------------------------------------------------
 nvim_sync() {
-  [ $# -eq 0 ] || die "nvim sync: keine weiteren Argumente (nvim -- sync startet nvim damit)"
-  running || die "Container läuft nicht"
+  [ $# -eq 0 ] || die "nvim sync: no further arguments (use nvim -- sync to open a file named sync)"
+  running || die "container is not running"
   exec_in -r /usr/local/bin/sync-nvim-config.sh
 }
 
 claude_auth() {
-  [ $# -eq 0 ] || die "claude auth: keine weiteren Argumente"
+  [ $# -eq 0 ] || die "claude auth: no further arguments"
   local src="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
-  [ -f "$src" ] || die "kein $src auf dem Host (dort erst 'claude' und /login)"
+  [ -f "$src" ] || die "no $src on the host (run 'claude' and /login there first)"
   start
   $RT cp "$src" "$NAME:/home/dev/.claude/.credentials.json"
-  # erst chmod, dann chown: Root im Container hat kein CAP_FOWNER und darf
-  # die Datei nach der Übergabe an dev nicht mehr ändern
+  # chmod first, chown second: root in the container has no CAP_FOWNER and may
+  # no longer touch the file once it belongs to dev
   exec_in -r chmod 600 /home/dev/.claude/.credentials.json
   exec_in -r chown "$DEVBOX_UID:$DEVBOX_GID" /home/dev/.claude/.credentials.json
-  # Onboarding-Status mitnehmen: ohne hasCompletedOnboarding startet Claude den
-  # Einrichtungsassistenten, und der verlangt den Login trotz gültiger Credentials
+  # Take the onboarding state along: without hasCompletedOnboarding, Claude opens
+  # the setup wizard, which asks for a login despite valid credentials
   local host_cfg fragment
   if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then host_cfg="$CLAUDE_CONFIG_DIR/.claude.json"; else host_cfg="$HOME/.claude.json"; fi
   if [ -f "$host_cfg" ] && command -v jq >/dev/null; then
     fragment="$(jq -c '{oauthAccount, hasCompletedOnboarding, lastOnboardingVersion, theme} | with_entries(select(.value != null))' "$host_cfg")"
     exec_in sh -c 'umask 077; f="$HOME/.claude/.claude.json"; [ -f "$f" ] || echo "{}" >"$f"
       jq --argjson add "$1" ". + \$add" "$f" >"$f.tmp" && mv "$f.tmp" "$f"' sh "$fragment"
-    log "Claude-Login und Onboarding-Status in Volume ${DEVBOX_VOLUME_PREFIX}-claude übernommen"
+    log "Claude login and onboarding state copied into volume ${DEVBOX_VOLUME_PREFIX}-claude"
   else
-    log "Claude-Login übernommen; $host_cfg fehlt oder kein jq - Onboarding läuft im Container einmal durch"
+    log "Claude login copied; $host_cfg missing or no jq - onboarding runs once in the container"
   fi
 }
 
-firewall_reload() {  # nimmt DEVBOX_EXTRA_DOMAINS/DEVBOX_ALLOW_HOST vom Host, nicht die beim Start gesetzten
-  [ $# -eq 0 ] || die "firewall reload: keine weiteren Argumente"
-  running || die "Container läuft nicht"
+firewall_reload() {  # takes DEVBOX_EXTRA_DOMAINS/DEVBOX_ALLOW_HOST from the host, not the ones set at start
+  [ $# -eq 0 ] || die "firewall reload: no further arguments"
+  running || die "container is not running"
   exec_in -r env "DEVBOX_EXTRA_DOMAINS=$DEVBOX_EXTRA_DOMAINS" "DEVBOX_ALLOW_HOST=$DEVBOX_ALLOW_HOST" \
     /usr/local/bin/init-firewall.sh
 }
 
 image_build() {
-  [ -f "$REPO_DIR/Containerfile" ] || die "Containerfile nicht in $REPO_DIR"
+  [ -f "$REPO_DIR/Containerfile" ] || die "no Containerfile in $REPO_DIR"
   $RT build -t "$DEVBOX_IMAGE" \
     --build-arg "USER_UID=$DEVBOX_UID" --build-arg "USER_GID=$DEVBOX_GID" \
     --build-arg "TZ=${TZ:-Europe/Berlin}" "$@" "$REPO_DIR"
 }
 
 volume_list() {
-  [ $# -eq 0 ] || die "volume list: keine weiteren Argumente"
+  [ $# -eq 0 ] || die "volume list: no further arguments"
   $RT volume ls --filter "name=${DEVBOX_VOLUME_PREFIX}-"
 }
 
 volume_rm() {
-  [ $# -eq 0 ] || die "volume rm: keine weiteren Argumente"
+  [ $# -eq 0 ] || die "volume rm: no further arguments"
   $RT volume ls -q | grep "^${DEVBOX_VOLUME_PREFIX}-" | xargs -r $RT volume rm
-  log "Volumes entfernt"
+  log "volumes removed"
 }
 
 devcontainer_init() {
-  [ $# -eq 0 ] || die "devcontainer init: keine weiteren Argumente"
+  [ $# -eq 0 ] || die "devcontainer init: no further arguments"
   local src="$REPO_DIR/devcontainer/devcontainer.json" dst="$WORKSPACE/.devcontainer/devcontainer.json"
-  [ -f "$src" ] || die "Vorlage $src fehlt"
-  [ -e "$dst" ] && die "$dst existiert bereits"
+  [ -f "$src" ] || die "template $src is missing"
+  [ -e "$dst" ] && die "$dst already exists"
   mkdir -p "$(dirname "$dst")" && cp "$src" "$dst"
-  log "angelegt: $dst (VS Code: dev.containers.dockerPath=podman)"
+  log "created: $dst (VS Code: dev.containers.dockerPath=podman)"
 }
 
-# Unterbefehl eines Themas fehlt oder ist unbekannt
-bad_action() {  # bad_action THEMA ANGEGEBEN ERLAUBT...
+# A topic's action is missing or unknown
+bad_action() {  # bad_action TOPIC GIVEN ALLOWED...
   local topic="$1" given="$2"; shift 2
-  [ -n "$given" ] && die "$topic $given: unbekannte Aktion (möglich: $*)"
-  die "$topic: Aktion fehlt (möglich: $*)"
+  [ -n "$given" ] && die "$topic $given: unknown action (possible: $*)"
+  die "$topic: action missing (possible: $*)"
 }
 
-# Alte Namen, die es in der gruppierten Form nicht mehr gibt
-renamed() { die "'$CMD' heißt jetzt: $*"; }
+# Old names that no longer exist in the grouped form
+renamed() { die "'$CMD' is now: $*"; }
 
-# --- Unterbefehle -----------------------------------------------------------------------------
+# --- Dispatch -----------------------------------------------------------------------------
 case "$CMD" in
-  # Sandbox dieses Verzeichnisses
+  # Sandbox of this directory
   shell)   start; exec_in zsh -l ;;
   root)    start; exec_in -rp bash -l ;;
-  run)     start; [ $# -gt 0 ] || die "run: Befehl fehlt"; exec_in "$@" ;;
-  start)   start; log "läuft: $NAME ($WORKSPACE)" ;;
-  stop)    exists && { $RT rm -f "$NAME" >/dev/null; log "$NAME gestoppt"; } || log "läuft nicht" ;;
-  restart) exists && $RT rm -f "$NAME" >/dev/null; start; log "neu gestartet" ;;
-  status)  if running; then echo "läuft: $NAME ($WORKSPACE)"; $RT stats --no-stream "$NAME"; else echo "gestoppt: $NAME"; fi ;;
-  logs)    exists || die "kein Container $NAME"; $RT logs "$NAME" ;;
+  run)     start; [ $# -gt 0 ] || die "run: command missing"; exec_in "$@" ;;
+  start)   start; log "running: $NAME ($WORKSPACE)" ;;
+  stop)    exists && { $RT rm -f "$NAME" >/dev/null; log "$NAME stopped"; } || log "not running" ;;
+  restart) exists && $RT rm -f "$NAME" >/dev/null; start; log "restarted" ;;
+  status)  if running; then echo "running: $NAME ($WORKSPACE)"; $RT stats --no-stream "$NAME"; else echo "stopped: $NAME"; fi ;;
+  logs)    exists || die "no container $NAME"; $RT logs "$NAME" ;;
   list|ls) $RT ps -a --filter label=devbox.workspace --format 'table {{.Names}}\t{{.Status}}\t{{.Labels}}' \
              | sed 's/devbox.workspace=//' ;;
 
-  # Themen: ohne Aktion startet das Programm, "--" erzwingt die Durchreiche
+  # Topics: without an action the program starts; "--" forces pass-through
   claude)
     case "${1:-}" in
       auth) shift; claude_auth "$@" ;;
@@ -330,12 +331,12 @@ case "$CMD" in
       *)    bad_action devcontainer "${1:-}" init ;;
     esac ;;
 
-  # frühere Namen
+  # former names
   sync)        renamed nvim sync ;;
   import-auth) renamed claude auth ;;
   build)       renamed image build ;;
-  volumes)     renamed "volume list  bzw.  volume rm" ;;
+  volumes)     renamed "volume list  /  volume rm" ;;
   init)        renamed devcontainer init ;;
 
-  *) die "unbekannter Befehl: $CMD (siehe devbox --help)" ;;
+  *) die "unknown command: $CMD (see devbox --help)" ;;
 esac

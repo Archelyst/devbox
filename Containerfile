@@ -1,4 +1,4 @@
-# devbox: Sandbox für Claude Code + Neovim + Rust (rootless Podman)
+# devbox: sandbox for Claude Code + Neovim + Rust (rootless Podman)
 FROM docker.io/library/debian:bookworm-slim
 
 ARG TZ=Europe/Berlin
@@ -14,7 +14,7 @@ ENV TZ=$TZ \
     LC_ALL=C.UTF-8 \
     DEBIAN_FRONTEND=noninteractive
 
-# --- Systempakete -----------------------------------------------------------
+# --- System packages -----------------------------------------------------------
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates curl wget gnupg2 xz-utils unzip zip jq \
     git git-lfs gh openssh-client \
@@ -27,7 +27,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   && ln -s /usr/bin/fdfind /usr/local/bin/fd \
   && ln -s /usr/bin/batcat /usr/local/bin/bat
 
-# --- Node (für nvim-Plugins, Mason, npm) ---------------------------------------
+# --- Node (for nvim plugins, Mason, npm) ---------------------------------------
 RUN ARCH=$(dpkg --print-architecture) \
   && case "$ARCH" in amd64) NARCH=x64;; arm64) NARCH=arm64;; *) echo "unsupported arch $ARCH"; exit 1;; esac \
   && curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${NARCH}.tar.xz" \
@@ -35,7 +35,7 @@ RUN ARCH=$(dpkg --print-architecture) \
   && rm -f /usr/local/CHANGELOG.md /usr/local/LICENSE /usr/local/README.md \
   && node --version && npm --version
 
-# --- Neovim (Release-Tarball, passend zur Host-Version) -----------------------
+# --- Neovim (release tarball, matching the host version) -----------------------
 RUN ARCH=$(dpkg --print-architecture) \
   && case "$ARCH" in amd64) NARCH=x86_64;; arm64) NARCH=arm64;; *) exit 1;; esac \
   && curl -fsSL "https://github.com/neovim/neovim/releases/download/${NVIM_VERSION}/nvim-linux-${NARCH}.tar.gz" \
@@ -44,7 +44,7 @@ RUN ARCH=$(dpkg --print-architecture) \
   && printf 'luafile /etc/devbox/nvim-clipboard.lua\n' > "/opt/nvim-linux-${NARCH}/share/nvim/sysinit.vim" \
   && nvim --version | head -1
 
-# --- User + Verzeichnisse für Mounts/Volumes -----------------------------------
+# --- User + directories for mounts/volumes -----------------------------------
 RUN groupadd -g "$USER_GID" "$USERNAME" \
   && useradd -m -u "$USER_UID" -g "$USER_GID" -s /bin/zsh "$USERNAME" \
   && mkdir -p /workspace /mnt/host/nvim \
@@ -76,7 +76,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 
 RUN curl -fsSL https://claude.ai/install.sh | bash \
   && claude --version \
-  && rm -rf "$HOME/.claude" && mkdir -p "$HOME/.claude"   # kein Build-Zustand ins Config-Volume
+  && rm -rf "$HOME/.claude" && mkdir -p "$HOME/.claude"   # keep build state out of the config volume
 
 RUN git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh" \
   && git clone --depth=1 https://github.com/zsh-users/zsh-autosuggestions "$HOME/.oh-my-zsh/custom/plugins/zsh-autosuggestions" \
@@ -87,14 +87,14 @@ COPY --chown=$USER_UID:$USER_GID rootfs/home/dev /home/$USERNAME
 
 WORKDIR /workspace
 USER root
-# Systemweite Dateien zuletzt (Entrypoint, Firewall, Allowlist, nvim-Clipboard-Shim):
-# Änderungen daran bauen so nicht die Toolchain-Layer neu.
+# System-wide files last (entrypoint, firewall, allowlist, nvim clipboard shim):
+# changing them does not rebuild the toolchain layers.
 COPY rootfs/etc /etc
 COPY rootfs/usr /usr
 RUN chmod 0755 /usr/local/bin/entrypoint.sh /usr/local/bin/init-firewall.sh /usr/local/bin/sync-nvim-config.sh
 
-# terminfo für Terminals, die Debian nicht kennt (sonst zeichnet zsh/nvim jede
-# Eingabe doppelt), und die fzf-Shell-Dateien, die das slim-Image aus /usr/share/doc wirft
+# terminfo for terminals Debian does not know (otherwise zsh/nvim echo every
+# keystroke twice), plus the fzf shell files the slim image drops from /usr/share/doc
 RUN curl -fsSL https://raw.githubusercontent.com/wezterm/wezterm/main/termwiz/data/wezterm.terminfo \
       | tic -x -o /usr/share/terminfo - \
   && FZF_VER="$(fzf --version | cut -d' ' -f1)" \
@@ -102,7 +102,7 @@ RUN curl -fsSL https://raw.githubusercontent.com/wezterm/wezterm/main/termwiz/da
   && curl -fsSL "https://raw.githubusercontent.com/junegunn/fzf/$FZF_VER/shell/key-bindings.zsh" -o /usr/share/doc/fzf/examples/key-bindings.zsh \
   && curl -fsSL "https://raw.githubusercontent.com/junegunn/fzf/$FZF_VER/shell/completion.zsh"   -o /usr/share/doc/fzf/examples/completion.zsh
 
-# Entrypoint läuft kurz als root (Firewall, Config-Sync) und wechselt dann per
-# setpriv ohne jegliche Capabilities zu $USERNAME. Wird via --user 0:0 gestartet.
+# The entrypoint runs briefly as root (firewall, config sync) and then switches
+# to $USERNAME via setpriv without any capabilities. Started with --user 0:0.
 ENTRYPOINT ["/usr/local/bin/entrypoint.sh"]
 CMD ["sleep", "infinity"]

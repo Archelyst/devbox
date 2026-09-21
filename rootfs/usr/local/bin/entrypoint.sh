@@ -1,6 +1,6 @@
 #!/bin/bash
-# Läuft als root (im User-Namespace des rootless Podman), richtet Firewall und
-# nvim-Config ein und wechselt dann capability-frei zum Entwicklungs-User.
+# Runs as root (inside the user namespace of rootless Podman), sets up the
+# firewall and the nvim config, then drops to the dev user without capabilities.
 set -euo pipefail
 
 USERNAME="${DEVBOX_USER:-dev}"
@@ -10,15 +10,15 @@ HOME_DIR="/home/$USERNAME"
 
 log() { echo "[devbox] $*"; }
 
-# 1. Firewall (braucht NET_ADMIN/NET_RAW, nur hier als root)
+# 1. Firewall (needs NET_ADMIN/NET_RAW, root only here)
 if [ "${DEVBOX_FIREWALL:-1}" = "0" ]; then
-  log "Firewall DEAKTIVIERT (DEVBOX_FIREWALL=0) - Container hat vollen Netzzugang"
+  log "firewall DISABLED (DEVBOX_FIREWALL=0) - the container has full network access"
 else
   /usr/local/bin/init-firewall.sh
 fi
 
-# 2. Volumes gehören dem User (frische Named Volumes übernehmen die Rechte aus dem
-#    Image, ältere oder fremde nicht - deshalb nur die Top-Level-Verzeichnisse prüfen)
+# 2. Volumes belong to the user (fresh named volumes inherit the ownership from
+#    the image, older or foreign ones do not - so only check the top-level dirs)
 for d in "$HOME_DIR/.claude" "$HOME_DIR/.local/share/nvim" "$HOME_DIR/.local/state/nvim" \
          "$HOME_DIR/.cargo/registry" "$HOME_DIR/.cargo/git" "$HOME_DIR/.history"; do
   [ -d "$d" ] || continue
@@ -27,15 +27,15 @@ for d in "$HOME_DIR/.claude" "$HOME_DIR/.local/share/nvim" "$HOME_DIR/.local/sta
   fi
 done
 
-# 3. nvim-Config vom Host (read-only gemountet) in den Container kopieren.
-#    Kopie statt Direkt-Mount: lazy.nvim darf das Lockfile schreiben, und der
-#    Container kann die Host-Config nicht verändern. Nachziehen: `devbox nvim sync`.
+# 3. Copy the host's nvim config (mounted read-only) into the container.
+#    A copy instead of a direct mount: lazy.nvim may write its lockfile, and the
+#    container cannot modify the host config. Refresh with `devbox nvim sync`.
 /usr/local/bin/sync-nvim-config.sh
 
 touch /run/devbox.ready
-log "bereit - User $USERNAME ($USER_UID:$USER_GID), Workspace /workspace"
+log "ready - user $USERNAME ($USER_UID:$USER_GID), workspace /workspace"
 
-# 4. Alle Capabilities dauerhaft abwerfen (auch aus dem Bounding-Set) und Hauptprozess starten
+# 4. Drop all capabilities for good (bounding set included) and start the main process
 exec setpriv --reuid="$USER_UID" --regid="$USER_GID" --init-groups \
      --inh-caps=-all --bounding-set=-all \
      env HOME="$HOME_DIR" USER="$USERNAME" LOGNAME="$USERNAME" "$@"

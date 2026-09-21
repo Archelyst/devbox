@@ -17,5 +17,5 @@ alias vi=nvim
 alias vim=nvim
 alias yolo='claude --dangerously-skip-permissions'
 
-# Sichtbarer Hinweis, dass man in der Box ist
+# Visible reminder that this shell is inside the box
 PROMPT="%F{yellow}[box]%f $PROMPT"
