@@ -1,0 +1,36 @@
+# Egress-Allowlist für devbox. Ein Hostname pro Zeile, # = Kommentar.
+# Wird beim Containerstart per DNS aufgelöst (IPv4). Änderungen wirken nach
+# `devbox restart` bzw. zur Laufzeit per `devbox firewall`.
+# Ad hoc ergänzen: DEVBOX_EXTRA_DOMAINS="host1 host2" devbox
+
+# Anthropic / Claude Code (API, OAuth-Login, Telemetrie, Updates)
+api.anthropic.com
+claude.ai
+console.anthropic.com
+platform.claude.com
+downloads.claude.ai
+statsig.com
+sentry.io
+
+# GitHub (die Haupt-Ranges kommen aus api.github.com/meta, hier die CDN-Hosts)
+raw.githubusercontent.com
+objects.githubusercontent.com
+release-assets.githubusercontent.com
+codeload.github.com
+
+# Rust
+static.rust-lang.org
+crates.io
+index.crates.io
+static.crates.io
+
+# npm (nvim/Mason installieren pyright & Co.)
+registry.npmjs.org
+
+# PyPI (Mason: debugpy)
+pypi.org
+files.pythonhosted.org
+
+# Debian-Pakete (falls im Container nachinstalliert wird)
+deb.debian.org
+security.debian.org

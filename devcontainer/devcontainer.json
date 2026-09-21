@@ -1,0 +1,51 @@
+{
+  "name": "devbox",
+  "image": "localhost/devbox:latest",
+  "runArgs": [
+    "--userns=keep-id:uid=1000,gid=1000",
+    "--cap-drop=ALL",
+    "--cap-add=NET_ADMIN",
+    "--cap-add=NET_RAW",
+    "--cap-add=SETUID",
+    "--cap-add=SETGID",
+    "--cap-add=SETPCAP",
+    "--cap-add=CHOWN",
+    "--security-opt=no-new-privileges",
+    "--memory=8g",
+    "--pids-limit=4096",
+    "--hostname=devbox",
+    "--stop-signal=SIGKILL"
+  ],
+  "containerUser": "root",
+  "remoteUser": "dev",
+  "overrideCommand": false,
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspace,type=bind,z",
+  "workspaceFolder": "/workspace",
+  "mounts": [
+    "source=${localEnv:HOME}/.config/nvim,target=/mnt/host/nvim,type=bind,readonly,z",
+    "source=devbox-claude,target=/home/dev/.claude,type=volume",
+    "source=devbox-nvim-data,target=/home/dev/.local/share/nvim,type=volume",
+    "source=devbox-nvim-state,target=/home/dev/.local/state/nvim,type=volume",
+    "source=devbox-cargo-registry,target=/home/dev/.cargo/registry,type=volume",
+    "source=devbox-cargo-git,target=/home/dev/.cargo/git,type=volume",
+    "source=devbox-history,target=/home/dev/.history,type=volume"
+  ],
+  "containerEnv": {
+    "DEVBOX_FIREWALL": "1",
+    "DEVBOX_ALLOW_HOST": "0",
+    "TZ": "${localEnv:TZ:Europe/Berlin}"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "anthropic.claude-code",
+        "rust-lang.rust-analyzer",
+        "vadimcn.vscode-lldb",
+        "tamasfe.even-better-toml"
+      ],
+      "settings": {
+        "terminal.integrated.defaultProfile.linux": "zsh"
+      }
+    }
+  }
+}
