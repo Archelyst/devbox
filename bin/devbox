@@ -2,21 +2,12 @@
 # devbox - startet eine Sandbox (rootless Podman) mit dem aktuellen
 # Verzeichnis unter /workspace und darin nvim, Rust und Claude Code.
 #
-#   devbox [shell]          Container starten (falls nötig) und zsh öffnen
-#   devbox claude [ARGS]    Claude Code (mit --dangerously-skip-permissions)
-#   devbox nvim [ARGS]      Neovim
-#   devbox run CMD...       beliebigen Befehl im Container ausführen
-#   devbox root             Root-Shell im Container (z. B. für apt install, flüchtig)
-#   devbox sync             nvim-Config vom Host neu in den Container kopieren
-#   devbox init             .devcontainer/devcontainer.json ins Projekt legen (VS Code)
-#   devbox stop|restart|status|logs
-#   devbox ls               alle devbox-Container
-#   devbox build [ARGS]     Image bauen (ARGS gehen an podman build)
-#   devbox firewall         Allowlist neu anwenden (DNS neu auflösen, DEVBOX_EXTRA_DOMAINS übernehmen)
-#   devbox import-auth      Claude-Login und Onboarding-Status vom Host in das Sandbox-Volume kopieren
-#   devbox volumes [rm]     Volumes anzeigen / löschen (Caches, Claude-Config!)
+# Aufbau der Befehle: Bloße Verben betreffen die Sandbox dieses Verzeichnisses
+# (devbox stop, devbox status), alles andere nennt zuerst das Thema und dann die
+# Aktion (devbox nvim sync, devbox claude auth, devbox firewall reload).
+# Ohne Aktion startet ein Thema sein Programm (devbox nvim, devbox claude).
+# Übersicht: devbox --help
 #
-# Optionen (vor dem Unterbefehl):  -C DIR   anderes Verzeichnis statt $PWD
 # Konfiguration: ~/.config/devbox/config (Bash, setzt DEVBOX_*-Variablen),
 # Umgebungsvariablen überschreiben die Datei. Siehe README.
 set -euo pipefail
@@ -53,6 +44,70 @@ REPO_DIR="$(dirname "$SCRIPT_DIR")"
 die() { echo "devbox: $*" >&2; exit 1; }
 log() { echo "devbox: $*" >&2; }
 
+usage() {
+  cat <<'EOF'
+devbox - Sandbox (rootless Podman) mit dem aktuellen Verzeichnis unter /workspace
+
+Aufruf:  devbox [-C DIR] [BEFEHL [ARGS]]
+
+Sandbox dieses Verzeichnisses
+  devbox [shell]              zsh öffnen (Standard ohne Befehl)
+  devbox root                 Root-Shell, z. B. für apt install (flüchtig)
+  devbox run CMD...           beliebigen Befehl im Container ausführen
+  devbox start                nur starten, ohne eine Shell zu öffnen
+  devbox stop                 Container entfernen
+  devbox restart              Container neu aufsetzen
+  devbox status               Zustand und Ressourcen
+  devbox logs                 Log des Entrypoints
+  devbox list                 alle devbox-Container auf dem Host
+
+Claude Code
+  devbox claude [ARGS]        starten (mit DEVBOX_CLAUDE_ARGS)
+  devbox claude auth          Login und Onboarding-Status vom Host ins Volume kopieren
+
+Neovim
+  devbox nvim [ARGS]          starten
+  devbox nvim sync            Config vom Host neu in den Container kopieren
+
+Firewall
+  devbox firewall reload      Allowlist neu anwenden (DNS neu auflösen,
+                              DEVBOX_EXTRA_DOMAINS vom Host übernehmen)
+
+Image
+  devbox image build [ARGS]   Image bauen (ARGS gehen an podman build)
+
+Volumes
+  devbox volume list          Volumes zeigen (Caches, Claude-Login, nvim-Plugins)
+  devbox volume rm            diese Volumes löschen - der Claude-Login geht verloren
+
+Devcontainer (VS Code)
+  devbox devcontainer init    .devcontainer/devcontainer.json ins Projekt legen
+
+Optionen
+  -C DIR                      anderes Verzeichnis als $PWD als Workspace
+  -h, --help                  diese Übersicht
+
+Soll ein Argument an nvim/claude gehen und nicht als Unterbefehl gelten:
+  devbox nvim -- sync
+
+Konfiguration: ~/.config/devbox/config (Bash, setzt DEVBOX_*-Variablen),
+Umgebungsvariablen überschreiben die Datei. Siehe README.
+EOF
+}
+
+# --- Argumente ----------------------------------------------------------------------------
+WORKSPACE="$PWD"
+while [ $# -gt 0 ]; do
+  case "$1" in
+    -C) shift; [ $# -gt 0 ] || die "-C braucht ein Verzeichnis"; WORKSPACE="$1"; shift ;;
+    -h|--help|help) usage; exit 0 ;;
+    *) break ;;
+  esac
+done
+CMD="${1:-shell}"; [ $# -gt 0 ] && shift
+WORKSPACE="$(readlink -f "$WORKSPACE")"
+[ -d "$WORKSPACE" ] || die "kein Verzeichnis: $WORKSPACE"
+
 # --- Runtime ---------------------------------------------------------------------------
 if [ -z "$DEVBOX_RUNTIME" ]; then
   if command -v podman >/dev/null; then DEVBOX_RUNTIME=podman
@@ -60,19 +115,6 @@ if [ -z "$DEVBOX_RUNTIME" ]; then
   else die "weder podman noch docker gefunden"; fi
 fi
 RT="$DEVBOX_RUNTIME"
-
-# --- Argumente ----------------------------------------------------------------------------
-WORKSPACE="$PWD"
-while [ $# -gt 0 ]; do
-  case "$1" in
-    -C) shift; [ $# -gt 0 ] || die "-C braucht ein Verzeichnis"; WORKSPACE="$1"; shift ;;
-    -h|--help) sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
-    *) break ;;
-  esac
-done
-CMD="${1:-shell}"; [ $# -gt 0 ] && shift
-WORKSPACE="$(readlink -f "$WORKSPACE")"
-[ -d "$WORKSPACE" ] || die "kein Verzeichnis: $WORKSPACE"
 
 # Containername: Basisname + kurzer Hash des Pfads
 hash8="$(printf '%s' "$WORKSPACE" | sha256sum | cut -c1-8)"
@@ -103,7 +145,7 @@ start() {
     log "Container $NAME existiert, aber läuft nicht - wird entfernt"
     $RT rm -f "$NAME" >/dev/null
   fi
-  $RT image exists "$DEVBOX_IMAGE" 2>/dev/null || die "Image $DEVBOX_IMAGE fehlt - erst 'devbox build'"
+  $RT image exists "$DEVBOX_IMAGE" 2>/dev/null || die "Image $DEVBOX_IMAGE fehlt - erst 'devbox image build'"
 
   local args=(
     run -d --name "$NAME" --hostname devbox --stop-signal SIGKILL   # sleep als PID 1 ignoriert SIGTERM
@@ -164,60 +206,136 @@ start() {
   die "Entrypoint wurde nicht fertig"
 }
 
+# --- Aktionen der Themen-Befehle -------------------------------------------------------------
+nvim_sync() {
+  [ $# -eq 0 ] || die "nvim sync: keine weiteren Argumente (nvim -- sync startet nvim damit)"
+  running || die "Container läuft nicht"
+  exec_in -r /usr/local/bin/sync-nvim-config.sh
+}
+
+claude_auth() {
+  [ $# -eq 0 ] || die "claude auth: keine weiteren Argumente"
+  local src="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
+  [ -f "$src" ] || die "kein $src auf dem Host (dort erst 'claude' und /login)"
+  start
+  $RT cp "$src" "$NAME:/home/dev/.claude/.credentials.json"
+  # erst chmod, dann chown: Root im Container hat kein CAP_FOWNER und darf
+  # die Datei nach der Übergabe an dev nicht mehr ändern
+  exec_in -r chmod 600 /home/dev/.claude/.credentials.json
+  exec_in -r chown "$DEVBOX_UID:$DEVBOX_GID" /home/dev/.claude/.credentials.json
+  # Onboarding-Status mitnehmen: ohne hasCompletedOnboarding startet Claude den
+  # Einrichtungsassistenten, und der verlangt den Login trotz gültiger Credentials
+  local host_cfg fragment
+  if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then host_cfg="$CLAUDE_CONFIG_DIR/.claude.json"; else host_cfg="$HOME/.claude.json"; fi
+  if [ -f "$host_cfg" ] && command -v jq >/dev/null; then
+    fragment="$(jq -c '{oauthAccount, hasCompletedOnboarding, lastOnboardingVersion, theme} | with_entries(select(.value != null))' "$host_cfg")"
+    exec_in sh -c 'umask 077; f="$HOME/.claude/.claude.json"; [ -f "$f" ] || echo "{}" >"$f"
+      jq --argjson add "$1" ". + \$add" "$f" >"$f.tmp" && mv "$f.tmp" "$f"' sh "$fragment"
+    log "Claude-Login und Onboarding-Status in Volume ${DEVBOX_VOLUME_PREFIX}-claude übernommen"
+  else
+    log "Claude-Login übernommen; $host_cfg fehlt oder kein jq - Onboarding läuft im Container einmal durch"
+  fi
+}
+
+firewall_reload() {  # nimmt DEVBOX_EXTRA_DOMAINS/DEVBOX_ALLOW_HOST vom Host, nicht die beim Start gesetzten
+  [ $# -eq 0 ] || die "firewall reload: keine weiteren Argumente"
+  running || die "Container läuft nicht"
+  exec_in -r env "DEVBOX_EXTRA_DOMAINS=$DEVBOX_EXTRA_DOMAINS" "DEVBOX_ALLOW_HOST=$DEVBOX_ALLOW_HOST" \
+    /usr/local/bin/init-firewall.sh
+}
+
+image_build() {
+  [ -f "$REPO_DIR/Containerfile" ] || die "Containerfile nicht in $REPO_DIR"
+  $RT build -t "$DEVBOX_IMAGE" \
+    --build-arg "USER_UID=$DEVBOX_UID" --build-arg "USER_GID=$DEVBOX_GID" \
+    --build-arg "TZ=${TZ:-Europe/Berlin}" "$@" "$REPO_DIR"
+}
+
+volume_list() {
+  [ $# -eq 0 ] || die "volume list: keine weiteren Argumente"
+  $RT volume ls --filter "name=${DEVBOX_VOLUME_PREFIX}-"
+}
+
+volume_rm() {
+  [ $# -eq 0 ] || die "volume rm: keine weiteren Argumente"
+  $RT volume ls -q | grep "^${DEVBOX_VOLUME_PREFIX}-" | xargs -r $RT volume rm
+  log "Volumes entfernt"
+}
+
+devcontainer_init() {
+  [ $# -eq 0 ] || die "devcontainer init: keine weiteren Argumente"
+  local src="$REPO_DIR/devcontainer/devcontainer.json" dst="$WORKSPACE/.devcontainer/devcontainer.json"
+  [ -f "$src" ] || die "Vorlage $src fehlt"
+  [ -e "$dst" ] && die "$dst existiert bereits"
+  mkdir -p "$(dirname "$dst")" && cp "$src" "$dst"
+  log "angelegt: $dst (VS Code: dev.containers.dockerPath=podman)"
+}
+
+# Unterbefehl eines Themas fehlt oder ist unbekannt
+bad_action() {  # bad_action THEMA ANGEGEBEN ERLAUBT...
+  local topic="$1" given="$2"; shift 2
+  [ -n "$given" ] && die "$topic $given: unbekannte Aktion (möglich: $*)"
+  die "$topic: Aktion fehlt (möglich: $*)"
+}
+
+# Alte Namen, die es in der gruppierten Form nicht mehr gibt
+renamed() { die "'$CMD' heißt jetzt: $*"; }
+
 # --- Unterbefehle -----------------------------------------------------------------------------
 case "$CMD" in
+  # Sandbox dieses Verzeichnisses
   shell)   start; exec_in zsh -l ;;
-  claude)  start; exec_in claude $DEVBOX_CLAUDE_ARGS "$@" ;;
-  nvim)    start; exec_in nvim "$@" ;;
-  run)     start; [ $# -gt 0 ] || die "run: Befehl fehlt"; exec_in "$@" ;;
   root)    start; exec_in -rp bash -l ;;
-  sync)    running || die "Container läuft nicht"; exec_in -r /usr/local/bin/sync-nvim-config.sh ;;
-  init)
-    src="$REPO_DIR/devcontainer/devcontainer.json"; dst="$WORKSPACE/.devcontainer/devcontainer.json"
-    [ -f "$src" ] || die "Vorlage $src fehlt"
-    [ -e "$dst" ] && die "$dst existiert bereits"
-    mkdir -p "$(dirname "$dst")" && cp "$src" "$dst" && log "angelegt: $dst (VS Code: dev.containers.dockerPath=podman)" ;;
+  run)     start; [ $# -gt 0 ] || die "run: Befehl fehlt"; exec_in "$@" ;;
+  start)   start; log "läuft: $NAME ($WORKSPACE)" ;;
   stop)    exists && { $RT rm -f "$NAME" >/dev/null; log "$NAME gestoppt"; } || log "läuft nicht" ;;
   restart) exists && $RT rm -f "$NAME" >/dev/null; start; log "neu gestartet" ;;
   status)  if running; then echo "läuft: $NAME ($WORKSPACE)"; $RT stats --no-stream "$NAME"; else echo "gestoppt: $NAME"; fi ;;
   logs)    exists || die "kein Container $NAME"; $RT logs "$NAME" ;;
-  ls)      $RT ps -a --filter label=devbox.workspace --format 'table {{.Names}}\t{{.Status}}\t{{.Labels}}' \
+  list|ls) $RT ps -a --filter label=devbox.workspace --format 'table {{.Names}}\t{{.Status}}\t{{.Labels}}' \
              | sed 's/devbox.workspace=//' ;;
-  build)
-    [ -f "$REPO_DIR/Containerfile" ] || die "Containerfile nicht in $REPO_DIR"
-    $RT build -t "$DEVBOX_IMAGE" \
-      --build-arg "USER_UID=$DEVBOX_UID" --build-arg "USER_GID=$DEVBOX_GID" \
-      --build-arg "TZ=${TZ:-Europe/Berlin}" "$@" "$REPO_DIR" ;;
-  firewall)  # nimmt DEVBOX_EXTRA_DOMAINS/DEVBOX_ALLOW_HOST vom Host, nicht die beim Start gesetzten
-    running || die "Container läuft nicht"
-    exec_in -r env "DEVBOX_EXTRA_DOMAINS=$DEVBOX_EXTRA_DOMAINS" "DEVBOX_ALLOW_HOST=$DEVBOX_ALLOW_HOST" \
-      /usr/local/bin/init-firewall.sh ;;
-  import-auth)
-    src="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/.credentials.json"
-    [ -f "$src" ] || die "kein $src auf dem Host (dort erst 'claude' und /login)"
-    start
-    $RT cp "$src" "$NAME:/home/dev/.claude/.credentials.json"
-    # erst chmod, dann chown: Root im Container hat kein CAP_FOWNER und darf
-    # die Datei nach der Übergabe an dev nicht mehr ändern
-    exec_in -r chmod 600 /home/dev/.claude/.credentials.json
-    exec_in -r chown "$DEVBOX_UID:$DEVBOX_GID" /home/dev/.claude/.credentials.json
-    # Onboarding-Status mitnehmen: ohne hasCompletedOnboarding startet Claude den
-    # Einrichtungsassistenten, und der verlangt den Login trotz gültiger Credentials
-    if [ -n "${CLAUDE_CONFIG_DIR:-}" ]; then host_cfg="$CLAUDE_CONFIG_DIR/.claude.json"; else host_cfg="$HOME/.claude.json"; fi
-    if [ -f "$host_cfg" ] && command -v jq >/dev/null; then
-      fragment="$(jq -c '{oauthAccount, hasCompletedOnboarding, lastOnboardingVersion, theme} | with_entries(select(.value != null))' "$host_cfg")"
-      exec_in sh -c 'umask 077; f="$HOME/.claude/.claude.json"; [ -f "$f" ] || echo "{}" >"$f"
-        jq --argjson add "$1" ". + \$add" "$f" >"$f.tmp" && mv "$f.tmp" "$f"' sh "$fragment"
-      log "Claude-Login und Onboarding-Status in Volume ${DEVBOX_VOLUME_PREFIX}-claude übernommen"
-    else
-      log "Claude-Login übernommen; $host_cfg fehlt oder kein jq - Onboarding läuft im Container einmal durch"
-    fi ;;
-  volumes)
-    if [ "${1:-}" = "rm" ]; then
-      $RT volume ls -q | grep "^${DEVBOX_VOLUME_PREFIX}-" | xargs -r $RT volume rm
-      log "Volumes entfernt"
-    else
-      $RT volume ls --filter "name=${DEVBOX_VOLUME_PREFIX}-"
-    fi ;;
+
+  # Themen: ohne Aktion startet das Programm, "--" erzwingt die Durchreiche
+  claude)
+    case "${1:-}" in
+      auth) shift; claude_auth "$@" ;;
+      --)   shift; start; exec_in claude $DEVBOX_CLAUDE_ARGS "$@" ;;
+      *)    start; exec_in claude $DEVBOX_CLAUDE_ARGS "$@" ;;
+    esac ;;
+  nvim)
+    case "${1:-}" in
+      sync) shift; nvim_sync "$@" ;;
+      --)   shift; start; exec_in nvim "$@" ;;
+      *)    start; exec_in nvim "$@" ;;
+    esac ;;
+  firewall)
+    case "${1:-}" in
+      reload) shift; firewall_reload "$@" ;;
+      *)      bad_action firewall "${1:-}" reload ;;
+    esac ;;
+  image)
+    case "${1:-}" in
+      build) shift; image_build "$@" ;;
+      *)     bad_action image "${1:-}" build ;;
+    esac ;;
+  volume)
+    case "${1:-}" in
+      list) shift; volume_list "$@" ;;
+      rm)   shift; volume_rm "$@" ;;
+      *)    bad_action volume "${1:-}" list rm ;;
+    esac ;;
+  devcontainer)
+    case "${1:-}" in
+      init) shift; devcontainer_init "$@" ;;
+      *)    bad_action devcontainer "${1:-}" init ;;
+    esac ;;
+
+  # frühere Namen
+  sync)        renamed nvim sync ;;
+  import-auth) renamed claude auth ;;
+  build)       renamed image build ;;
+  volumes)     renamed "volume list  bzw.  volume rm" ;;
+  init)        renamed devcontainer init ;;
+
   *) die "unbekannter Befehl: $CMD (siehe devbox --help)" ;;
 esac

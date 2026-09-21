@@ -29,7 +29,7 @@ done
 
 # 3. nvim-Config vom Host (read-only gemountet) in den Container kopieren.
 #    Kopie statt Direkt-Mount: lazy.nvim darf das Lockfile schreiben, und der
-#    Container kann die Host-Config nicht verändern. Nachziehen: `devbox sync`.
+#    Container kann die Host-Config nicht verändern. Nachziehen: `devbox nvim sync`.
 /usr/local/bin/sync-nvim-config.sh
 
 touch /run/devbox.ready

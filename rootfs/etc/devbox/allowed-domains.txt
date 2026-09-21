@@ -1,6 +1,6 @@
 # Egress-Allowlist für devbox. Ein Hostname pro Zeile, # = Kommentar.
 # Wird beim Containerstart per DNS aufgelöst (IPv4). Änderungen wirken nach
-# `devbox restart` bzw. zur Laufzeit per `devbox firewall`.
+# `devbox restart` bzw. zur Laufzeit per `devbox firewall reload`.
 # Ad hoc ergänzen: DEVBOX_EXTRA_DOMAINS="host1 host2" devbox
 
 # Anthropic / Claude Code (API, OAuth-Login, Telemetrie, Updates)

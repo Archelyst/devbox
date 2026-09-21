@@ -8,9 +8,11 @@ devbox            # zsh im Container, Projekt liegt unter /workspace
 devbox claude     # direkt Claude Code (mit --dangerously-skip-permissions)
 devbox nvim src/main.rs
 devbox root       # Root-Shell, z. B. für apt install (geht bei stop verloren)
-devbox sync       # nvim-Config vom Host neu einlesen
+devbox nvim sync  # nvim-Config vom Host neu einlesen
 devbox stop
 ```
+
+Die Befehle folgen einem Schema: bloße Verben betreffen die Sandbox dieses Verzeichnisses (`start`, `stop`, `restart`, `status`, `logs`, `list`, `shell`, `root`, `run`), alles andere nennt zuerst das Thema und dann die Aktion (`nvim sync`, `claude auth`, `firewall reload`, `image build`, `volume list|rm`, `devcontainer init`). Bei `nvim` und `claude` startet das Thema ohne Aktion das Programm; soll ein Argument trotzdem durchgereicht werden, trennt `--` ab (`devbox nvim -- sync` öffnet die Datei `sync`). `devbox --help` zeigt alles.
 
 Zwischenablage: Yank in nvim geht per OSC 52 an dein Terminal (Windows Terminal, Alacritty, WezTerm, kitty, foot können das; in tmux `set -g set-clipboard on`). Der Shim dafür liegt in `rootfs/etc/devbox/nvim-clipboard.lua` und wird über Neovims `sysinit.vim` geladen, deine Config bleibt unberührt.
 
@@ -23,16 +25,16 @@ Voraussetzungen: rootless Podman (getestet mit 4.3, Podman 5 sollte genauso gehe
 ```sh
 git clone <dieses Repo> ~/devbox
 ln -s ~/devbox/bin/devbox ~/.local/bin/devbox
-devbox build          # Image bauen, ca. 2,2 GB, dauert ein paar Minuten
+devbox image build    # ca. 2,2 GB, dauert ein paar Minuten
 ```
 
 Beim ersten Start einmal in Claude einloggen (`devbox claude`, dann `/login`), oder den bestehenden Login vom Host übernehmen:
 
 ```sh
-devbox import-auth    # kopiert Login (~/.claude/.credentials.json) und Onboarding-Status (aus ~/.claude.json) in das Sandbox-Volume
+devbox claude auth    # kopiert Login (~/.claude/.credentials.json) und Onboarding-Status (aus ~/.claude.json) in das Sandbox-Volume
 ```
 
-Der Login liegt danach im Volume `devbox-claude` und gilt für alle Projekte. Ohne den Onboarding-Status würde Claude im Container den Einrichtungsassistenten zeigen und dort trotz gültiger Zugangsdaten erneut einen Login verlangen. Das Theme kommt aus `rootfs/home/dev/.claude/settings.json` (Standard: dark). `devbox volumes rm` löscht auch dieses Volume, danach `import-auth` erneut ausführen.
+Der Login liegt danach im Volume `devbox-claude` und gilt für alle Projekte. Ohne den Onboarding-Status würde Claude im Container den Einrichtungsassistenten zeigen und dort trotz gültiger Zugangsdaten erneut einen Login verlangen. Das Theme kommt aus `rootfs/home/dev/.claude/settings.json` (Standard: dark). `devbox volume rm` löscht auch dieses Volume, danach `devbox claude auth` erneut ausführen.
 
 ## Was im Container ist
 
@@ -47,7 +49,7 @@ Der Login liegt danach im Volume `devbox-claude` und gilt für alle Projekte. Oh
 
 Dein `TERM` wird in den Container durchgereicht. Kennt das Image den Typ nicht (kein terminfo-Eintrag), zeichnen zsh und nvim jede Eingabe doppelt; das Skript weicht dann auf `xterm-256color` aus. Für WezTerm liegt der Eintrag im Image, andere Terminals im `Containerfile` ergänzen.
 
-User im Container ist `dev` (UID 1000). Rootless Podman bildet deinen Host-User per `--userns=keep-id` darauf ab, Dateien im Workspace behalten also deinen Besitzer. Hat dein Host-User eine andere UID: `DEVBOX_UID`/`DEVBOX_GID` setzen und `devbox build` erneut laufen lassen.
+User im Container ist `dev` (UID 1000). Rootless Podman bildet deinen Host-User per `--userns=keep-id` darauf ab, Dateien im Workspace behalten also deinen Besitzer. Hat dein Host-User eine andere UID: `DEVBOX_UID`/`DEVBOX_GID` setzen und `devbox image build` erneut laufen lassen.
 
 ## Mounts und Volumes
 
@@ -60,15 +62,15 @@ User im Container ist `dev` (UID 1000). Rootless Podman bildet deinen Host-User 
 | `~/.cargo/registry`, `~/.cargo/git` | Volumes | Crate-Cache |
 | `~/.history` | Volume | Shell-History |
 
-Die nvim-Config wird kopiert statt direkt gemountet: lazy.nvim darf das Lockfile schreiben, und nichts im Container kann deine Host-Config ändern (die würde beim nächsten `nvim` auf dem Host ausgeführt). Änderungen an der Host-Config holt `devbox sync` oder `devbox restart` nach. Beim ersten `nvim` installiert lazy.nvim die Plugins ins Volume, Mason lädt Server nach. Willst du die Config selbst bearbeiten: `cd ~/.config/nvim && devbox`, dann liegt sie beschreibbar unter `/workspace`.
+Die nvim-Config wird kopiert statt direkt gemountet: lazy.nvim darf das Lockfile schreiben, und nichts im Container kann deine Host-Config ändern (die würde beim nächsten `nvim` auf dem Host ausgeführt). Änderungen an der Host-Config holt `devbox nvim sync` oder `devbox restart` nach. Beim ersten `nvim` installiert lazy.nvim die Plugins ins Volume, Mason lädt Server nach. Willst du die Config selbst bearbeiten: `cd ~/.config/nvim && devbox`, dann liegt sie beschreibbar unter `/workspace`.
 
-Etwas nachinstallieren: alles im Home geht als `dev` (`cargo install`, `rustup`, `pip install --user`, Mason). Für `apt` gibt es `devbox root`; das ist ein `podman exec --privileged` als Root vom Host aus, und was du dort installierst, verschwindet mit `devbox stop`. Dauerhaft gehört es ins `Containerfile`, dann `devbox build`. Skripte und Allowlist liegen in den letzten Layern.
+Etwas nachinstallieren: alles im Home geht als `dev` (`cargo install`, `rustup`, `pip install --user`, Mason). Für `apt` gibt es `devbox root`; das ist ein `podman exec --privileged` als Root vom Host aus, und was du dort installierst, verschwindet mit `devbox stop`. Dauerhaft gehört es ins `Containerfile`, dann `devbox image build`. Skripte und Allowlist liegen in den letzten Layern.
 
 Nicht gemountet, absichtlich: `~/.ssh`, `~/.gitconfig`, `~/.config/github-copilot`, sonstige Credentials. Git-Name und -Mail kommen als Umgebungsvariablen mit, `git commit` funktioniert, `git push` machst du vom Host. Copilot im Container bei Bedarf einmal per `:Copilot auth` anmelden (landet im nvim-data-Volume).
 
 ## VS Code / Devcontainer
 
-`devbox init` legt `.devcontainer/devcontainer.json` ins Projekt. Sie nutzt dasselbe Image, dieselben Volumes und dieselben Sicherheits-Flags wie das Skript; VS Code (Extension „Dev Containers") oder das `devcontainer`-CLI können den Ordner damit im Container öffnen. Vorher in den VS-Code-Settings `"dev.containers.dockerPath": "podman"` setzen und das Image mit `devbox build` bauen. Die Vorlage liegt in `devcontainer/devcontainer.json`.
+`devbox devcontainer init` legt `.devcontainer/devcontainer.json` ins Projekt. Sie nutzt dasselbe Image, dieselben Volumes und dieselben Sicherheits-Flags wie das Skript; VS Code (Extension „Dev Containers") oder das `devcontainer`-CLI können den Ordner damit im Container öffnen. Vorher in den VS-Code-Settings `"dev.containers.dockerPath": "podman"` setzen und das Image mit `devbox image build` bauen. Die Vorlage liegt in `devcontainer/devcontainer.json`.
 
 ## Sicherheitsmodell
 
@@ -82,10 +84,10 @@ Angelehnt an `anthropics/claude-code/.devcontainer` und die Härtungs-Hinweise a
 
 Grenzen, die man kennen sollte:
 
-- Die Allowlist löst Hostnamen beim Start auf. CDN-Hosts (crates.io, githubusercontent.com) wechseln IPs; wenn ein Download hängt, hilft `devbox firewall` (löst neu auf) oder `devbox restart`.
+- Die Allowlist löst Hostnamen beim Start auf. CDN-Hosts (crates.io, githubusercontent.com) wechseln IPs; wenn ein Download hängt, hilft `devbox firewall reload` (löst neu auf) oder `devbox restart`.
 - Erlaubte Hosts sind vertrauenswürdig, aber breit: GitHub reicht zum Exfiltrieren, wenn Claude ein Token hätte. Deshalb keine Tokens mounten.
 - Gleicher Kernel wie der Host. Für stärkere Isolation: gVisor oder VM (siehe Doku).
-- Podman-`exec` (also `devbox run`/`root`/`firewall`) ist vertrauenswürdig und darf mehr als der Hauptprozess: Shells aus `devbox` tragen die Capabilities des Containers im Bounding-Set, effektiv aber keine, und `no-new-privileges` verhindert, dass sie welche bekommen. Das ist gewollt.
+- Podman-`exec` (also `devbox run`/`root`/`firewall reload`) ist vertrauenswürdig und darf mehr als der Hauptprozess: Shells aus `devbox` tragen die Capabilities des Containers im Bounding-Set, effektiv aber keine, und `no-new-privileges` verhindert, dass sie welche bekommen. Das ist gewollt.
 - Unter WSL nutzt Podman oft den `vfs`-Speichertreiber; Build und Erststart sind dort deutlich langsamer als mit Overlay auf einem normalen Linux.
 
 ## Konfiguration
@@ -118,20 +120,20 @@ DEVBOX_EXTRA_DOMAINS="docs.rs code.claude.com"
 
 Der Container erreicht nur die Hosts aus der Allowlist (siehe Sicherheitsmodell). Drei Wege, weitere freizuschalten:
 
-- **Einmalig für diesen Container**: `DEVBOX_EXTRA_DOMAINS="docs.rs example.org" devbox`. Läuft der Container schon: `DEVBOX_EXTRA_DOMAINS="docs.rs example.org" devbox firewall` wendet die Allowlist sofort neu an, ohne Neustart. Die Variable muss dabei jedes Mal komplett angegeben werden, sie ersetzt die vorherige.
+- **Einmalig für diesen Container**: `DEVBOX_EXTRA_DOMAINS="docs.rs example.org" devbox`. Läuft der Container schon: `DEVBOX_EXTRA_DOMAINS="docs.rs example.org" devbox firewall reload` wendet die Allowlist sofort neu an, ohne Neustart. Die Variable muss dabei jedes Mal komplett angegeben werden, sie ersetzt die vorherige.
 - **Dauerhaft für dich**: `DEVBOX_EXTRA_DOMAINS` in `~/.config/devbox/config` eintragen (siehe Beispiel oben).
-- **Dauerhaft im Image**: Hostname in `rootfs/etc/devbox/allowed-domains.txt` eintragen (eine Zeile pro Host, `#` für Kommentare) und `devbox build`. Der Rebuild dauert nur Sekunden, weil die Datei im letzten Layer liegt.
+- **Dauerhaft im Image**: Hostname in `rootfs/etc/devbox/allowed-domains.txt` eintragen (eine Zeile pro Host, `#` für Kommentare) und `devbox image build`. Der Rebuild dauert nur Sekunden, weil die Datei im letzten Layer liegt.
 
-Angegeben werden Hostnamen, keine URLs und keine Wildcards; `*.example.org` geht nicht, jeder Subdomain-Host muss einzeln stehen. Die Namen werden beim Start (bzw. bei `devbox firewall`) per DNS zu IPv4-Adressen aufgelöst. Ob ein Host durchkommt, zeigt das Startlog (`[firewall] host -> ip`) oder ein `curl -I https://host` im Container.
+Angegeben werden Hostnamen, keine URLs und keine Wildcards; `*.example.org` geht nicht, jeder Subdomain-Host muss einzeln stehen. Die Namen werden beim Start (bzw. bei `devbox firewall reload`) per DNS zu IPv4-Adressen aufgelöst. Ob ein Host durchkommt, zeigt das Startlog (`[firewall] host -> ip`) oder ein `curl -I https://host` im Container.
 
 Mit Docker statt Podman funktioniert das Skript ebenfalls (`--userns keep-id` entfällt), dann muss die Host-UID der Image-UID entsprechen.
 
 ## Aufräumen
 
 ```sh
-devbox ls              # alle Sandbox-Container
+devbox list            # alle Sandbox-Container
 devbox stop            # Container des aktuellen Verzeichnisses
-devbox volumes         # Caches, Claude-Login, nvim-Plugins
-devbox volumes rm      # alles davon löschen (Login geht verloren)
+devbox volume list     # Caches, Claude-Login, nvim-Plugins
+devbox volume rm       # alles davon löschen (Login geht verloren)
 podman rmi localhost/devbox:latest
 ```

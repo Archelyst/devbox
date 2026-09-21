@@ -1,6 +1,6 @@
 #!/bin/bash
 # Kopiert die read-only gemountete Host-nvim-Config nach ~/.config/nvim des
-# Entwicklungs-Users. Läuft als root (Entrypoint, `devbox sync`) und wechselt
+# Entwicklungs-Users. Läuft als root (Entrypoint, `devbox nvim sync`) und wechselt
 # für den Kopiervorgang per setpriv zum User.
 set -euo pipefail
 USERNAME="${DEVBOX_USER:-dev}"
