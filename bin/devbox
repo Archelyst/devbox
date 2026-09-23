@@ -25,6 +25,7 @@ set -euo pipefail
 : "${DEVBOX_PORTS:=}"                # "8080:8080 3000:3000"
 : "${DEVBOX_MOUNTS:=}"               # extra -v specs, space separated
 : "${DEVBOX_CLAUDE_ARGS:=--dangerously-skip-permissions}"
+: "${DEVBOX_CLAUDE_MD:=${CLAUDE_CONFIG_DIR:-$HOME/.claude}/CLAUDE.md}"  # global CLAUDE.md, writable ("" = off)
 : "${DEVBOX_UID:=1000}"              # UID/GID of the user in the image (build arg USER_UID)
 : "${DEVBOX_GID:=1000}"
 : "${DEVBOX_VOLUME_PREFIX:=devbox}"
@@ -178,6 +179,17 @@ start() {
     args+=(-v "$DEVBOX_NVIM_CONFIG:/mnt/host/nvim:ro,z")
   else
     log "nvim config $DEVBOX_NVIM_CONFIG not found - nvim without a config"
+  fi
+  # Global CLAUDE.md of the host, writable: one file for host and sandbox, so
+  # instructions written inside also apply outside. Only this file, not the whole
+  # ~/.claude - that directory holds the login. Podman would turn a missing source
+  # into a directory, so mount it only if it is there.
+  if [ -n "$DEVBOX_CLAUDE_MD" ]; then
+    if [ -f "$DEVBOX_CLAUDE_MD" ]; then
+      args+=(-v "$DEVBOX_CLAUDE_MD:/home/dev/.claude/CLAUDE.md:z")
+    else
+      log "no $DEVBOX_CLAUDE_MD on the host - no shared CLAUDE.md"
+    fi
   fi
   # Git identity from the host (no credentials)
   local gname gemail

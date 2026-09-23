@@ -36,6 +36,8 @@ devbox claude auth    # copies the login (~/.claude/.credentials.json) and the o
 
 The login then lives in the volume `devbox-claude` and applies to all projects. Without the onboarding state, Claude would show the setup wizard inside the container and ask for a login there despite valid credentials. The theme comes from `rootfs/home/dev/.claude/settings.json` (default: dark). `devbox volume rm` deletes this volume too; run `devbox claude auth` again afterwards.
 
+Instructions that should apply in every project belong in `~/.claude/CLAUDE.md` on the host. devbox mounts exactly that file writable into the sandbox, so both sides read and write the same file: Claude Code in the container loads it as user-level instructions and can extend it, and what it writes is there on the host afterwards. Only the file is mounted, never the whole `~/.claude` - that directory holds your login. `DEVBOX_CLAUDE_MD` points somewhere else, an empty value switches it off. Without such a file on the host, the sandbox simply runs without global instructions. One caveat comes with the single-file bind mount: editors that save via a temporary file and `rename` replace the mount instead of the file, and their change never reaches the host. In nvim inside the container, `:set backupcopy=yes` before editing it - or edit the file on the host, where the question does not arise.
+
 ## What is in the container
 
 | Component | Source | Configured via |
@@ -58,6 +60,7 @@ The user in the container is `dev` (UID 1000). Rootless Podman maps your host us
 | `/workspace` | the current directory (rw) | the project |
 | `/mnt/host/nvim` | `~/.config/nvim` (ro) | copied to `~/.config/nvim` at startup |
 | `~/.claude` | volume `devbox-claude` | Claude's login, settings and sessions |
+| `~/.claude/CLAUDE.md` | `~/.claude/CLAUDE.md` (rw) | instructions across all projects, shared with the host |
 | `~/.local/share/nvim`, `~/.local/state/nvim` | volumes | lazy.nvim plugins, Mason binaries |
 | `~/.cargo/registry`, `~/.cargo/git` | volumes | crate cache |
 | `~/.history` | volume | shell history |
@@ -70,7 +73,7 @@ Deliberately not mounted: `~/.ssh`, `~/.gitconfig`, `~/.config/github-copilot` a
 
 ## VS Code / devcontainer
 
-`devbox devcontainer init` drops `.devcontainer/devcontainer.json` into the project. It uses the same image, the same volumes and the same security flags as the script; VS Code (the "Dev Containers" extension) or the `devcontainer` CLI can open the folder in the container with it. Set `"dev.containers.dockerPath": "podman"` in your VS Code settings first and build the image with `devbox image build`. The template lives in `devcontainer/devcontainer.json`.
+`devbox devcontainer init` drops `.devcontainer/devcontainer.json` into the project. It uses the same image, the same volumes and the same security flags as the script; VS Code (the "Dev Containers" extension) or the `devcontainer` CLI can open the folder in the container with it. Set `"dev.containers.dockerPath": "podman"` in your VS Code settings first and build the image with `devbox image build`. The template lives in `devcontainer/devcontainer.json`. It mounts `~/.claude/CLAUDE.md` unconditionally - unlike the script it cannot check whether the file is there, and a missing source would make the runtime create a directory of that name. So `touch ~/.claude/CLAUDE.md` on the host beforehand, or delete the line from the template.
 
 ## Security model
 
@@ -80,7 +83,7 @@ Modelled on `anthropics/claude-code/.devcontainer` and the hardening notes from 
 - **Capabilities**: `--cap-drop ALL`; the entrypoint briefly gets `NET_ADMIN`, `NET_RAW`, `SETUID`, `SETGID`, `SETPCAP` and `CHOWN` for the firewall and the user switch, and then starts the main process via `setpriv` with an empty bounding set. `no-new-privileges` prevents setuid binaries or file capabilities from adding anything back. There is no `sudo` in the container.
 - **Egress allowlist** (`init-firewall.sh`): iptables + ipset, default REJECT. Allowed are DNS to the resolvers from `/etc/resolv.conf`, the GitHub ranges from `api.github.com/meta` and the hosts from `rootfs/etc/devbox/allowed-domains.txt` (Anthropic, crates.io, static.rust-lang.org, npm, PyPI, Debian). IPv6 is closed entirely so the IPv4 list cannot be bypassed via AAAA. The host gateway is not reachable by default.
 - **Resources**: `--memory 8g`, `--pids-limit 4096` (Rust builds need room).
-- **Filesystem**: only the project directory is mounted writable.
+- **Filesystem**: writable are the project directory and, if it exists, the single file `~/.claude/CLAUDE.md` (`DEVBOX_CLAUDE_MD=` removes it). It is the one place where the sandbox can change something outside the project - deliberately, because instructions it writes there are supposed to apply on the host as well.
 
 Limits worth knowing:
 
@@ -106,6 +109,7 @@ Environment variables or `~/.config/devbox/config` (bash syntax, the environment
 | `DEVBOX_PORTS` | empty | `"8080:8080 3000:3000"`, ports published outwards |
 | `DEVBOX_MOUNTS` | empty | additional `-v` specs, e.g. `"$HOME/data:/data:ro,z"` |
 | `DEVBOX_CLAUDE_ARGS` | `--dangerously-skip-permissions` | arguments for `devbox claude` |
+| `DEVBOX_CLAUDE_MD` | `~/.claude/CLAUDE.md` | global CLAUDE.md, mounted writable (empty = off) |
 | `DEVBOX_UID` / `DEVBOX_GID` | `1000` | UID/GID in the image (build arg) |
 
 Example `~/.config/devbox/config`:

@@ -24,6 +24,7 @@
   "mounts": [
     "source=${localEnv:HOME}/.config/nvim,target=/mnt/host/nvim,type=bind,readonly,z",
     "source=devbox-claude,target=/home/dev/.claude,type=volume",
+    "source=${localEnv:HOME}/.claude/CLAUDE.md,target=/home/dev/.claude/CLAUDE.md,type=bind,z",
     "source=devbox-nvim-data,target=/home/dev/.local/share/nvim,type=volume",
     "source=devbox-nvim-state,target=/home/dev/.local/state/nvim,type=volume",
     "source=devbox-cargo-registry,target=/home/dev/.cargo/registry,type=volume",
