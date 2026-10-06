@@ -12,7 +12,7 @@ devbox nvim sync  # re-read the nvim config from the host
 devbox stop
 ```
 
-The commands follow a scheme: bare verbs act on the sandbox of this directory (`start`, `stop`, `restart`, `status`, `logs`, `list`, `shell`, `root`, `run`), everything else names the topic first and the action second (`nvim sync`, `claude auth`, `firewall reload`, `image build`, `volume list|rm`, `devcontainer init`). For `nvim` and `claude`, the topic without an action starts the program; to pass an argument through anyway, separate it with `--` (`devbox nvim -- sync` opens the file `sync`). `devbox --help` lists everything.
+The commands follow a scheme: bare verbs act on the sandbox of this directory (`start`, `stop`, `restart`, `status`, `logs`, `shell`, `root`, `run`) or on all of them (`list`, `rm`), everything else names the topic first and the action second (`nvim sync`, `claude auth`, `firewall reload`, `image build`, `volume list|rm`, `devcontainer init`). For `nvim` and `claude`, the topic without an action starts the program; to pass an argument through anyway, separate it with `--` (`devbox nvim -- sync` opens the file `sync`). `devbox --help` lists everything.
 
 Clipboard: yanking in nvim goes to your terminal via OSC 52 (Windows Terminal, Alacritty, WezTerm, kitty and foot support it; in tmux use `set -g set-clipboard on`). The shim for it lives in `rootfs/etc/devbox/nvim-clipboard.lua` and is loaded through Neovim's `sysinit.vim`, so your own config stays untouched.
 
@@ -135,8 +135,11 @@ The script also works with Docker instead of Podman (`--userns keep-id` is dropp
 ## Cleaning up
 
 ```sh
-devbox list            # all sandbox containers
+devbox list            # directories that have a sandbox container
 devbox stop            # the container of the current directory
+devbox rm DIR          # the container of another directory (as printed by list)
+devbox rm --stopped    # all containers that are not running
+devbox rm --all        # all sandbox containers
 devbox volume list     # caches, Claude login, nvim plugins
 devbox volume rm       # delete all of that (the login is lost)
 podman rmi localhost/devbox:latest

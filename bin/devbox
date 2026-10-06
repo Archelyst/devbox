@@ -60,7 +60,9 @@ Sandbox of this directory
   devbox restart              recreate the container
   devbox status               state and resources
   devbox logs                 log of the entrypoint
-  devbox list                 all devbox containers on this host
+  devbox list                 directories that have a devbox container on this host
+  devbox rm DIR...            remove the container of another directory (see list)
+  devbox rm --all|--stopped   remove all devbox containers / only the stopped ones
 
 Claude Code
   devbox claude [ARGS]        start it (with DEVBOX_CLAUDE_ARGS)
@@ -275,6 +277,40 @@ volume_rm() {
   log "volumes removed"
 }
 
+container_rm() {  # rm DIR... | rm --all | rm --stopped   - directories as printed by "devbox list"
+  local mode="" target path name
+  case "${1:-}" in
+    --all|-a)  mode=all;     shift ;;
+    --stopped) mode=stopped; shift ;;
+    -*) die "rm: unknown option $1 (possible: --all, --stopped)" ;;
+  esac
+  if [ -n "$mode" ]; then
+    [ $# -eq 0 ] || die "rm --$mode: no further arguments"
+    local removed=0
+    while IFS=$'\t' read -r name path; do
+      [ -n "$name" ] || continue
+      if [ "$mode" = stopped ] && [ "$($RT inspect -f '{{.State.Running}}' "$name" 2>/dev/null || true)" = true ]; then
+        continue
+      fi
+      $RT rm -f "$name" >/dev/null
+      log "$name removed ($path)"
+      removed=$((removed + 1))
+    done < <($RT ps -a --filter label=devbox.workspace --format '{{.Names}}\t{{index .Labels "devbox.workspace"}}')
+    [ "$removed" -gt 0 ] || log "nothing to remove"
+    return 0
+  fi
+  [ $# -gt 0 ] || die "rm: directory missing (see devbox list), or --all / --stopped"
+  for target in "$@"; do
+    # look the container up by its label, so this also works once the
+    # directory is gone on the host
+    path="$(readlink -f "$target")"
+    name="$($RT ps -a --filter "label=devbox.workspace=$path" --format '{{.Names}}' | head -n1)"
+    [ -n "$name" ] || die "rm: no devbox container for $target (see devbox list)"
+    $RT rm -f "$name" >/dev/null
+    log "$name removed ($path)"
+  done
+}
+
 devcontainer_init() {
   [ $# -eq 0 ] || die "devcontainer init: no further arguments"
   local src="$REPO_DIR/devcontainer/devcontainer.json" dst="$WORKSPACE/.devcontainer/devcontainer.json"
@@ -305,8 +341,9 @@ case "$CMD" in
   restart) exists && $RT rm -f "$NAME" >/dev/null; start; log "restarted" ;;
   status)  if running; then echo "running: $NAME ($WORKSPACE)"; $RT stats --no-stream "$NAME"; else echo "stopped: $NAME"; fi ;;
   logs)    exists || die "no container $NAME"; $RT logs "$NAME" ;;
-  list|ls) $RT ps -a --filter label=devbox.workspace --format 'table {{.Names}}\t{{.Status}}\t{{.Labels}}' \
-             | sed 's/devbox.workspace=//' ;;
+  list|ls) $RT ps -a --filter label=devbox.workspace --format '{{index .Labels "devbox.workspace"}}' \
+             | while IFS= read -r p; do printf '%q\n' "$p"; done ;;   # shell-quoted, ready to paste
+  rm)      container_rm "$@" ;;
 
   # Topics: without an action the program starts; "--" forces pass-through
   claude)
